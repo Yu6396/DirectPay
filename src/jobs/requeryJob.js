@@ -113,91 +113,121 @@ async function processRequery() {
         /*
          * Successful transaction.
          */
-        if (newStatus === "success") {
-          console.log(`✅ Txn ${txn.transaction_ref} completed successfully`);
+       /*
+ * Successful transaction.
+ */
+// Successful transaction.
+if (newStatus === "success") {
+  console.log(`✅ Txn ${txn.transaction_ref} completed successfully`);
+  // No notification here by convention — success is redundant with the
+  // in-app screen. See notificationService.js doc comment.
+  continue;
+}
 
-          continue;
-        }
+// Failed transaction — refund only once.
+if (newStatus === "failed") {
+  if (txn.refunded) {
+    console.log(`ℹ️ Txn ${txn.transaction_ref} already refunded`);
+    continue;
+  }
 
-        /*
-         * Failed transaction.
-         *
-         * Refund only once.
-         */
-        if (newStatus === "failed") {
-          if (txn.refunded) {
-            console.log(`ℹ️ Txn ${txn.transaction_ref} already refunded`);
+  await refundUser(txn.user_id, txn.amount, txn);
+  console.log(`💰 Refund completed for ${txn.transaction_ref}`);
 
-            continue;
-          }
+  const user = await User.findByPk(txn.user_id);
 
-          /*
-           * Refund user
-           */
-          await refundUser(txn.user_id, txn.amount, txn);
+  if (!user) {
+    console.error(`⚠️ User not found for ${txn.transaction_ref}`);
+    continue;
+  }
 
-          console.log(`💰 Refund completed for ${txn.transaction_ref}`);
+  try {
+    await sendEmail(
+      user.email,
+      "Refund Processed",
+      { name: user.name, amount: txn.amount, category: txn.category_id, reference: txn.transaction_ref },
+      "refundProcessed",
+    );
+  } catch (emailError) {
+    console.error(`⚠️ Refund email failed for ${txn.transaction_ref}:`, emailError.message);
+  }
 
-          /*
-           * Fetch user
-           */
-          const user = await User.findByPk(txn.user_id);
+  try {
+    await createNotification({
+      user_id: user.user_id,
+      title: "Payment failed",
+      message: `Your payment of ₦${txn.amount} failed and has been refunded to your wallet.`,
+      type: "transaction",
+      transaction_id: txn.transaction_id,
+      transaction_source: "bill",
+    });
+  } catch (notificationError) {
+    console.error(`⚠️ Notification failed for ${txn.transaction_ref}:`, notificationError.message);
+  }
+}
 
-          if (!user) {
-            console.error(`⚠️ User not found for ${txn.transaction_ref}`);
+/*
+ * Failed transaction.
+ *
+ * Refund only once.
+ */
+if (newStatus === "failed") {
+  if (txn.refunded) {
+    console.log(`ℹ️ Txn ${txn.transaction_ref} already refunded`);
+    continue;
+  }
 
-            continue;
-          }
+  await refundUser(txn.user_id, txn.amount, txn);
+  console.log(`💰 Refund completed for ${txn.transaction_ref}`);
 
-          /*
-           * Send email.
-           *
-           * Email failure should NOT break the refund
-           * or transaction processing.
-           */
-          try {
-            await sendEmail(
-              user.email,
-              "Refund Processed",
-              {
-                name: user.name,
-                amount: txn.amount,
-                category: txn.category_id,
-                reference: txn.transaction_ref,
-              },
-              "refundProcessed",
-            );
+  const user = await User.findByPk(txn.user_id);
 
-            console.log(`📧 Refund email sent for ${txn.transaction_ref}`);
-          } catch (emailError) {
-            console.error(
-              `⚠️ Refund email failed for ${txn.transaction_ref}:`,
-              emailError.message,
-            );
-          }
+  if (!user) {
+    console.error(`⚠️ User not found for ${txn.transaction_ref}`);
+    continue;
+  }
 
-          /*
-           * In-app notification.
-           *
-           * Notification failure should also NOT break
-           * the transaction/refund process.
-           */
-          try {
-            await createNotification(
-              user.id,
-              `Your payment of ₦${txn.amount} failed and has been refunded.`,
-            );
+  try {
+    await sendEmail(
+      user.email,
+      "Refund Processed",
+      {
+        name: user.name,
+        amount: txn.amount,
+        category: txn.category_id,
+        reference: txn.transaction_ref,
+      },
+      "refundProcessed",
+    );
 
-            console.log(
-              `🔔 Refund notification created for ${txn.transaction_ref}`,
-            );
-          } catch (notificationError) {
-            console.error(
-              `⚠️ Notification failed for ${txn.transaction_ref}:`,
-              notificationError.message,
-            );
-          }
-        }
+    console.log(`📧 Refund email sent for ${txn.transaction_ref}`);
+  } catch (emailError) {
+    console.error(
+      `⚠️ Refund email failed for ${txn.transaction_ref}:`,
+      emailError.message,
+    );
+  }
+
+  try {
+    await createNotification(
+      user.user_id, // was user.id
+      "Payment failed",
+      `Your payment of ₦${txn.amount} failed and has been refunded to your wallet.`,
+      {
+        type: "transaction",
+        transactionId: txn.transaction_id,
+        transactionSource: "bill",
+      },
+    );
+
+    console.log(`🔔 Refund notification created for ${txn.transaction_ref}`);
+  } catch (notificationError) {
+    console.error(
+      `⚠️ Notification failed for ${txn.transaction_ref}:`,
+      notificationError.message,
+    );
+  }
+}
       } catch (err) {
         /*
          * One transaction failing should NOT stop

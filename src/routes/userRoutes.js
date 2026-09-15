@@ -25,6 +25,11 @@ const {
   createBeneficiary,
   getUserBeneficiaries,
   deleteBeneficiary,
+   getUserNotifications,
+ markNotificationRead,
+  markAllNotificationsRead,
+  deleteNotification,
+  clearAllNotifications,
 } = require("../controllers/userController");
 const validationmiddleware = require("../middlewares/validationMiddleware");
 const {
@@ -81,5 +86,11 @@ router.post("/beneficiaries",UserAuthorization, createBeneficiary);
 router.get("/beneficiaries", UserAuthorization, getUserBeneficiaries);
 
 router.delete("/beneficiaries/:id", UserAuthorization, deleteBeneficiary);
+
+router.get("/notifications",UserAuthorization, getUserNotifications);
+router.patch("/notifications/:id/read", UserAuthorization, markNotificationRead);
+router.patch("/notifications/read-all", UserAuthorization, markAllNotificationsRead);
+router.delete("/notifications/:id", UserAuthorization, deleteNotification);
+router.delete("/notifications", UserAuthorization, clearAllNotifications);
 
 module.exports = router;

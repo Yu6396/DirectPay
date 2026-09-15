@@ -12,6 +12,7 @@ const { v4: uuidv4 } = require("uuid");
 const { generateRequestId, verifyPin } = require("../utils");
 const { getFriendlyMessage } = require("../utils/vtpassErrorMap");
 const { Op } = require("sequelize");
+const { createNotification } = require("../services/NotificationService");
 
 async function debitWallet(user_id, amount, payment_reference = null) {
   try {
@@ -46,18 +47,13 @@ async function debitWallet(user_id, amount, payment_reference = null) {
   }
 }
 function extractElectricityToken(data) {
-  const rawToken =
-    data?.token ||
-    data?.Token ||
-    data?.purchased_code;
+  const rawToken = data?.token || data?.Token || data?.purchased_code;
 
   if (!rawToken) {
     return null;
   }
 
-  return rawToken
-    .replace(/^token\s*:\s*/i, "")
-    .trim();
+  return rawToken.replace(/^token\s*:\s*/i, "").trim();
 }
 const payAirtime = async (req, res) => {
   try {
@@ -114,6 +110,27 @@ const payAirtime = async (req, res) => {
 
       status: successful ? "success" : "failed",
     });
+
+    // Immediate-failure notification — covers the case processRequery
+    // never sees, since this transaction resolves synchronously and never
+    // sits in "pending" long enough for the cron to pick it up.
+    if (!successful) {
+      try {
+        await createNotification({
+          user_id,
+          title: "Airtime purchase failed",
+          message: `Your ₦${amount} airtime purchase failed. A refund will be processed shortly.`,
+          type: "transaction",
+          transaction_id: transaction.transaction_id,
+          transaction_source: "bill",
+        });
+      } catch (notificationError) {
+        console.error(
+          `⚠️ Notification failed for ${transaction.transaction_ref}:`,
+          notificationError.message,
+        );
+      }
+    }
 
     return res.json({
       message: getFriendlyMessage(
@@ -220,6 +237,24 @@ const payData = async (req, res) => {
       amount: result?.data?.content?.transactions?.amount || amount,
     });
 
+    if (!successful) {
+      try {
+        await createNotification({
+          user_id,
+          title: "Data purchase failed",
+          message: `Your ₦${amount} data purchase failed. A refund will be processed shortly.`,
+          type: "transaction",
+          transaction_id: transaction.transaction_id,
+          transaction_source: "bill",
+        });
+      } catch (notificationError) {
+        console.error(
+          `⚠️ Notification failed for ${transaction.transaction_ref}:`,
+          notificationError.message,
+        );
+      }
+    }
+
     return res.json({
       message: getFriendlyMessage(
         result?.data?.code,
@@ -280,20 +315,38 @@ const payElectricity = async (req, res) => {
 
     const successful = result.success && result?.data?.code === "000";
 
+    // Removed dead code here — a leftover, unassigned fallback-chain
+    // expression (result?.data?.token || result?.data?.Token || ...)
+    // that evaluated and discarded its result. extractElectricityToken
+    // already handles this fallback logic internally.
     const token = extractElectricityToken(result?.data);
-      result?.data?.token ||
-      result?.data?.Token ||
-      result?.data?.purchased_code ||
-      null;
 
     await transaction.update({
       vtpass_reference: result?.data?.requestId || requestId,
 
       token,
 
-      status:
-        result.success && result?.data?.code === "000" ? "success" : "failed",
+      status: successful ? "success" : "failed",
     });
+
+    if (!successful) {
+      try {
+        await createNotification({
+          user_id,
+          title: "Electricity payment failed",
+          message: `Your ₦${amount} electricity payment failed. A refund will be processed shortly.`,
+          type: "transaction",
+          transaction_id: transaction.transaction_id,
+          transaction_source: "bill",
+        });
+      } catch (notificationError) {
+        console.error(
+          `⚠️ Notification failed for ${transaction.transaction_ref}:`,
+          notificationError.message,
+        );
+      }
+    }
+
     return res.json({
       message: getFriendlyMessage(
         result?.data?.code,
@@ -311,11 +364,10 @@ const payElectricity = async (req, res) => {
 
 const payTV = async (req, res) => {
   try {
-    const { provider_id, smart_card, variation_code, amount, pin } =
-      req.body;
+    const { provider_id, smart_card, variation_code, amount, pin } = req.body;
     const { user_id } = req.user;
 
-const phone = req.user.phone_number;
+    const phone = req.user.phone_number;
 
     const checkPin = await verifyPin(req.user, pin);
     if (!checkPin.valid) {
@@ -353,13 +405,31 @@ const phone = req.user.phone_number;
     });
 
     const successful = result.success && result?.data?.code === "000";
+
     await transaction.update({
       vtpass_reference: result?.data?.requestId || requestId,
       expiry_date: result?.data?.content?.transactions?.expiry_date,
       amount: result?.data?.content?.transactions?.amount || amount,
-      status:
-        result.success && result?.data?.code === "000" ? "success" : "failed",
+      status: successful ? "success" : "failed",
     });
+
+    if (!successful) {
+      try {
+        await createNotification({
+          user_id,
+          title: "TV subscription failed",
+          message: `Your ₦${amount} TV subscription failed. A refund will be processed shortly.`,
+          type: "transaction",
+          transaction_id: transaction.transaction_id,
+          transaction_source: "bill",
+        });
+      } catch (notificationError) {
+        console.error(
+          `⚠️ Notification failed for ${transaction.transaction_ref}:`,
+          notificationError.message,
+        );
+      }
+    }
 
     return res.json({
       message: getFriendlyMessage(

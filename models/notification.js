@@ -29,12 +29,20 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: false,
       },
       type: {
-        type: DataTypes.ENUM("transaction", "system", "promo", "alert"),
-        defaultValue: "system",
+        type: DataTypes.ENUM("transaction", "security", "promotion"),
+        defaultValue: "transaction",
       },
       status: {
         type: DataTypes.ENUM("unread", "read"),
         defaultValue: "unread",
+      },
+      transaction_id: {
+        type: DataTypes.UUID,
+        allowNull: true,
+      },
+      transaction_source: {
+        type: DataTypes.ENUM("wallet", "bill"),
+        allowNull: true,
       },
     },
     {

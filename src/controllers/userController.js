@@ -8,6 +8,7 @@ const {
   Transaction,
   Beneficiary,
   BillProvider,
+  Notification,
 } = require("../../models");
 const bcrypt = require("bcrypt");
 const { v4: uuidv4 } = require("uuid");
@@ -322,7 +323,7 @@ const loginUser = async (req, res) => {
         email: user.email,
         first_name: user.first_name,
         last_name: user.last_name,
-        pin_hash: user.pin_hash,
+        has_pin: !!user.pin_hash,
         phone_number: user.phone_number,
       },
     });
@@ -1132,6 +1133,106 @@ const deleteBeneficiary = async (req, res) => {
   }
 };
 
+
+
+const getUserNotifications = async (req, res) => {
+  try {
+    const { user_id } = req.user;
+
+    const notifications = await Notification.findAll({
+      where: { user_id },
+      order: [["createdAt", "DESC"]],
+      limit: 100, // sane cap — add pagination later if this list grows large
+    });
+
+    return res.json({
+      message: "Notifications retrieved",
+      notifications,
+    });
+  } catch (err) {
+    console.error("Get Notifications Error:", err.message);
+    return res.status(400).json({ message: err.message });
+  }
+};
+
+const markNotificationRead = async (req, res) => {
+  try {
+    const { user_id } = req.user;
+    const { id } = req.params;
+
+    const notification = await Notification.findOne({
+      where: { notification_id: id, user_id },
+    });
+
+    if (!notification) {
+      return res.status(404).json({ message: "Notification not found" });
+    }
+
+    await notification.update({ status: "read" });
+
+    return res.json({ message: "Marked as read", notification });
+  } catch (err) {
+    console.error("Mark Notification Read Error:", err.message);
+    return res.status(400).json({ message: err.message });
+  }
+};
+
+// PATCH /user/notifications/read-all
+const markAllNotificationsRead = async (req, res) => {
+  try {
+    const { user_id } = req.user;
+
+    await Notification.update(
+      { status: "read" },
+      { where: { user_id, status: "unread" } }
+    );
+
+    return res.json({ message: "All notifications marked as read" });
+  } catch (err) {
+    console.error("Mark All Notifications Read Error:", err.message);
+    return res.status(400).json({ message: err.message });
+  }
+};
+
+// DELETE /user/notifications/:id
+const deleteNotification = async (req, res) => {
+  try {
+    const { user_id } = req.user;
+    const { id } = req.params;
+
+    const deleted = await Notification.destroy({
+      where: { notification_id: id, user_id },
+    });
+
+    if (!deleted) {
+      return res.status(404).json({ message: "Notification not found" });
+    }
+
+    return res.json({ message: "Notification deleted" });
+  } catch (err) {
+    console.error("Delete Notification Error:", err.message);
+    return res.status(400).json({ message: err.message });
+  }
+};
+
+// DELETE /user/notifications  (clear all)
+const clearAllNotifications = async (req, res) => {
+  try {
+    const { user_id } = req.user;
+
+    await Notification.destroy({ where: { user_id } });
+
+    return res.json({ message: "All notifications cleared" });
+  } catch (err) {
+    console.error("Clear All Notifications Error:", err.message);
+    return res.status(400).json({ message: err.message });
+  }
+};
+
+
+
+
+
 module.exports = {
   createUser,
   verifyUser,
@@ -1157,4 +1258,9 @@ module.exports = {
   createBeneficiary,
   getUserBeneficiaries,
   deleteBeneficiary,
+   getUserNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+  deleteNotification,
+  clearAllNotifications,
 };

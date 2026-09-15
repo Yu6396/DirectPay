@@ -62,17 +62,23 @@ async function processFailedRefunds() {
   }
 
   // Notification should NOT undo/fail the refund
-  try {
-    await createNotification(
-      user.id,
-      `Your payment of ₦${txn.amount} failed and has been refunded to your wallet.`
-    );
-  } catch (notificationError) {
-    console.error(
-      `⚠️ Refund notification failed for ${txn.transaction_ref}:`,
-      notificationError.message
-    );
-  }
+ try {
+  await createNotification(
+    user.user_id, // was user.id — see note below
+    "Refund processed",
+    `Your payment of ₦${txn.amount} failed and has been refunded to your wallet.`,
+    {
+      type: "transaction",
+      transactionId: txn.transaction_id,
+      transactionSource: "bill",
+    },
+  );
+} catch (notificationError) {
+  console.error(
+    `⚠️ Refund notification failed for ${txn.transaction_ref}:`,
+    notificationError.message
+  );
+}
 
 } catch (err) {
   console.error(
