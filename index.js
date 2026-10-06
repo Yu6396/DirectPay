@@ -10,9 +10,10 @@ const passport = require("./config/passport");
 const userRoutes = require("./src/routes/userRoutes");
 const billsPaymentRoutes = require("./src/routes/billsPaymentRoutes");
 const oauthRoutes = require("./src/routes/authRoutes");
+const notificationRoutes = require("./src/routes/notificationRoutes"); 
+const pushTokenRoutes = require("./src/routes/pushToken"); 
 
 // === Initialize jobs & cron tasks ===
-require("./src/jobs/requeryJob");
 require("./src/jobs/cleanupRefreshTokens");
 require("./src/utils/cron");
 
@@ -37,6 +38,8 @@ app.use(cors(corsOptions));
 app.use("/auth", oauthRoutes);
 app.use("/api/v1/user", userRoutes);
 app.use("/api/v1/vtpass", billsPaymentRoutes);
+app.use("/api/v1/user", notificationRoutes); 
+app.use("/api/v1/user", pushTokenRoutes); 
 
 // === Root route ===
 app.get("/", (req, res) => {

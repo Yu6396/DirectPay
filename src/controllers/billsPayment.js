@@ -2,59 +2,19 @@ const {
   BillTransaction,
   BillProvider,
   BillProduct,
-  Wallet,
   BillCategory,
-  Transaction,
 } = require("../../models");
 const vtpass = require("../services/vtPassServices");
-const { sequelize } = require("../../models");
-const { v4: uuidv4 } = require("uuid");
-const { generateRequestId, verifyPin } = require("../utils");
+const {
+  generateRequestId,
+  verifyPin,
+  debitWallet,
+  extractElectricityToken,
+} = require("../utils");
 const { getFriendlyMessage } = require("../utils/vtpassErrorMap");
 const { Op } = require("sequelize");
 const { createNotification } = require("../services/NotificationService");
 
-async function debitWallet(user_id, amount, payment_reference = null) {
-  try {
-    const wallet = await Wallet.findOne({
-      where: { user_id },
-    });
-
-    if (!wallet) {
-      throw new Error("Wallet not found");
-    }
-
-    if (Number(wallet.balance) < Number(amount)) {
-      throw new Error("Insufficient balance");
-    }
-
-    wallet.balance = Number(wallet.balance) - Number(amount);
-
-    await wallet.save();
-
-    await Transaction.create({
-      user_id,
-      wallet_id: wallet.wallet_id,
-      amount: Number(amount),
-      type: "debit",
-      status: "successful",
-      payment_reference,
-    });
-
-    return wallet;
-  } catch (error) {
-    throw new Error(error.message || "Failed to debit wallet");
-  }
-}
-function extractElectricityToken(data) {
-  const rawToken = data?.token || data?.Token || data?.purchased_code;
-
-  if (!rawToken) {
-    return null;
-  }
-
-  return rawToken.replace(/^token\s*:\s*/i, "").trim();
-}
 const payAirtime = async (req, res) => {
   try {
     const { provider_id, phone, amount, pin } = req.body;

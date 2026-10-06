@@ -1,4 +1,5 @@
 const bcrypt = require("bcrypt");
+const { Wallet, Transaction } = require("../../models");
 const saltRounds = 10;
 
 const isEmpty = (val) => {
@@ -112,6 +113,48 @@ const verifyPin = async (user, pin) => {
   };
 };
 
+function extractElectricityToken(data) {
+  const rawToken = data?.token || data?.Token || data?.purchased_code;
+
+  if (!rawToken) {
+    return null;
+  }
+
+  return rawToken.replace(/^token\s*:\s*/i, "").trim();
+}
+
+async function debitWallet(user_id, amount, payment_reference = null) {
+  try {
+    const wallet = await Wallet.findOne({
+      where: { user_id },
+    });
+
+    if (!wallet) {
+      throw new Error("Wallet not found");
+    }
+
+    if (Number(wallet.balance) < Number(amount)) {
+      throw new Error("Insufficient balance");
+    }
+
+    wallet.balance = Number(wallet.balance) - Number(amount);
+
+    await wallet.save();
+
+    await Transaction.create({
+      user_id,
+      wallet_id: wallet.wallet_id,
+      amount: Number(amount),
+      type: "debit",
+      status: "successful",
+      payment_reference,
+    });
+
+    return wallet;
+  } catch (error) {
+    throw new Error(error.message || "Failed to debit wallet");
+  }
+}
  
 
 module.exports = {
@@ -122,5 +165,7 @@ module.exports = {
   generateRandomPassword,
   generateRequestId,
   generateRef,
-  verifyPin
+  verifyPin,
+  extractElectricityToken,
+  debitWallet
 };
