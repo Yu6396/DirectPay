@@ -11,7 +11,6 @@
     "undo-seed": "npx sequelize-cli db:seed:undo",
     "migrate": "sequelize-cli db:migrate --env production",
     "seed": "sequelize-cli db:seed:all --env production",
-    "postinstall": "npm run migrate",
     "refund-cron": "node src/scripts/refundCron.js",
     "sync:products": "node src/jobs/vtpassProductJob.js"
   },
