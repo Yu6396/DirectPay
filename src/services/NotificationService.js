@@ -1,5 +1,5 @@
 const { Notification } = require("../../models");
-const { sendPushNotification } = require("./pushNotificationService");
+const { sendPushNotification } = require("./Pushnotificationservice");
 
 /**
  * Creates a notification row AND sends a push notification to the user's
