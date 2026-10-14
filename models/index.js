@@ -14,17 +14,17 @@ const { Sequelize, DataTypes } = require('sequelize');
 //     },
 //   },
 // });
-  const sequelize = new Sequelize(
-    process.env.DB_NAME || 'directPay',
-    process.env.DB_USER || 'postgres',
-    process.env.DB_PASSWORD || '5582710',
-    {
-      host: process.env.DB_HOST || '127.0.0.1',
-      port: process.env.DB_PORT || 5432,
-      dialect: 'postgres',
-      logging: false, // optional
-    }
-  );
+
+const sequelize = new Sequelize(process.env.DB_URL, {
+  dialect: 'postgres',
+  dialectOptions: {
+    ssl: {
+      require: true,
+      rejectUnauthorized: false,
+    },
+  },
+  logging: false,
+});
 
 const db = {};
 const modelsDir = __dirname;
