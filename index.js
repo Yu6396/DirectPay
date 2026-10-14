@@ -1,4 +1,7 @@
 require("dotenv").config();
+console.log("🚀 DirectPay index.js loaded");
+console.log("DB_URL configured:", Boolean(process.env.DB_URL));
+
 const express = require("express");
 const app = express();
 const cookieParser = require("cookie-parser");
