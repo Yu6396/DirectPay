@@ -7,29 +7,55 @@ const {
 } = require("../../models");
 
 async function refundUser(userId, amount, txn) {
-  const t = await sequelize.transaction();
+  let t;
 
   try {
-    // Re-fetch and lock the transaction row itself — this is the missing
-    // guard. Without it, two concurrent cron runs can both pass the
-    // refunded:false check done outside this function, then both credit
-    // the wallet, since the wallet lock alone doesn't stop a second
-    // call from proceeding once the first one commits and releases it.
-    const lockedTxn = await BillTransaction.findByPk(txn.transaction_id, {
-      transaction: t,
-      lock: t.LOCK.UPDATE,
-    });
+    if (!txn?.transaction_id) {
+      throw new Error("Bill transaction ID is required");
+    }
+
+    t = await sequelize.transaction();
+
+    // Lock the bill transaction to prevent concurrent refunds
+    const lockedTxn = await BillTransaction.findByPk(
+      txn.transaction_id,
+      {
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      }
+    );
 
     if (!lockedTxn) {
       throw new Error("Transaction not found");
     }
 
+    // Ensure the bill belongs to this user
+    if (lockedTxn.user_id !== userId) {
+      throw new Error("Refund user does not match bill transaction");
+    }
+
+    // Prevent duplicate refunds
     if (lockedTxn.refunded) {
-      console.log(
-        `ℹ️ Txn ${lockedTxn.transaction_ref} already refunded — skipping duplicate refund`,
-      );
       await t.commit();
+      t = null;
+
+      console.log(
+        `Transaction ${lockedTxn.transaction_ref} already refunded`
+      );
+
       return false;
+    }
+
+    // Refund failed transactions only
+    if (lockedTxn.status !== "failed") {
+      throw new Error("Only failed bill transactions can be refunded");
+    }
+
+    // Use the amount recorded on the bill transaction
+    const refundAmount = Number(lockedTxn.total_amount);
+
+    if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+      throw new Error("Invalid recorded refund amount");
     }
 
     const user = await User.findByPk(userId, {
@@ -40,10 +66,9 @@ async function refundUser(userId, amount, txn) {
       throw new Error("User not found");
     }
 
+    // Lock the wallet before updating its balance
     const wallet = await Wallet.findOne({
-      where: {
-        user_id: userId,
-      },
+      where: { user_id: userId },
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
@@ -52,14 +77,17 @@ async function refundUser(userId, amount, txn) {
       throw new Error("Wallet not found");
     }
 
-    const refundAmount = Number(amount);
+    const currentBalance = Number(wallet.balance || 0);
 
-    wallet.balance = Number(wallet.balance) + refundAmount;
+    if (!Number.isFinite(currentBalance)) {
+      throw new Error("Invalid wallet balance");
+    }
 
-    await wallet.save({
-      transaction: t,
-    });
+    wallet.balance = currentBalance + refundAmount;
 
+    await wallet.save({ transaction: t });
+
+    // Record the refund credit
     await Transaction.create(
       {
         user_id: userId,
@@ -69,27 +97,32 @@ async function refundUser(userId, amount, txn) {
         status: "successful",
         payment_reference: lockedTxn.transaction_ref,
       },
-      {
-        transaction: t,
-      },
+      { transaction: t }
     );
 
+    // Mark the bill as refunded in the same transaction
     await lockedTxn.update(
-      {
-        refunded: true,
-      },
-      {
-        transaction: t,
-      },
+      { refunded: true },
+      { transaction: t }
     );
 
     await t.commit();
+    t = null;
 
-    console.log(`💰 Refunded ${refundAmount} to user ${userId}`);
+    console.log(
+      `Refunded ₦${refundAmount} to user ${userId}`
+    );
 
     return true;
   } catch (error) {
-    await t.rollback();
+    if (t && !t.finished) {
+      try {
+        await t.rollback();
+      } catch (rollbackError) {
+        console.error("Refund rollback error:", rollbackError);
+      }
+    }
+
     throw error;
   }
 }

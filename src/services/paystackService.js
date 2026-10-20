@@ -17,16 +17,21 @@ const intializePayment = async (email, amount) => {
   });
 };
 
+
 const verifyPayment = async (reference) => {
+  if (!reference) {
+    throw new Error("Payment reference is required");
+  }
+
   return axios({
     method: "GET",
-    url: `https://api.paystack.co/transaction/verify/${reference}`,
+    url: `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
     headers: {
       Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-      "Content-Type": "application/json",
     },
+    timeout: 10000,
   });
-}
+};
 
 module.exports = {
   intializePayment,

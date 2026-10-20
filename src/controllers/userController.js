@@ -34,80 +34,99 @@ const normalizePhone = (phone = "") => {
 const createUser = async (req, res) => {
   const { first_name, last_name, email, phone_number, password } = req.body;
 
-  const transaction = await sequelize.transaction();
-
   try {
     const normalizedPhone = normalizePhone(phone_number);
 
-    const existingUser = await User.findOne({
-      where: {
-        [Op.or]: [{ email }, { phone_number: normalizedPhone }],
-      },
-      transaction,
+    const otpCode = generateOtp();
+    const expiresAt = new Date(Date.now() + 60 * 1000);
+
+    const result = await sequelize.transaction(async (transaction) => {
+      const existingUser = await User.findOne({
+        where: {
+          [Op.or]: [{ email }, { phone_number: normalizedPhone }],
+        },
+        transaction,
+      });
+
+      if (existingUser) {
+        if (existingUser.email === email) {
+          return {
+            status: 409,
+            body: { message: "Email already registered" },
+          };
+        }
+
+        if (existingUser.phone_number === normalizedPhone) {
+          return {
+            status: 409,
+            body: { message: "Phone number already registered" },
+          };
+        }
+      }
+
+      const { salt, hashedPassword } = await saltAndHashPassword(password);
+
+      const user_id = uuidv4();
+
+      await User.create(
+        {
+          user_id,
+          first_name,
+          last_name,
+          email,
+          phone_number: normalizedPhone,
+          password_salt: salt,
+          password_hash: hashedPassword,
+        },
+        { transaction },
+      );
+
+      await Wallet.create(
+        {
+          wallet_id: uuidv4(),
+          user_id,
+          balance: 0,
+        },
+        { transaction },
+      );
+
+      await Otp.create(
+        {
+          email,
+          otp: otpCode,
+          expires_at: expiresAt,
+        },
+        { transaction },
+      );
+
+      return {
+        status: 201,
+        body: {
+          message: "Verification OTP sent to your email",
+        },
+      };
     });
 
-    if (existingUser) {
-      if (existingUser.email === email) {
-        return res.status(409).json({ message: "Email already registered" });
-      }
-      if (existingUser.phone_number === normalizedPhone) {
-        return res
-          .status(409)
-          .json({ message: "Phone number already registered" });
-      }
+    if (result.status !== 201) {
+      return res.status(result.status).json(result.body);
     }
 
-    const { salt, hashedPassword } = await saltAndHashPassword(password);
+    // Send email only after the database transaction commits.
+    try {
+      await sendEmail(email, "Verify your OTP", { otp: otpCode }, "otp");
+    } catch (emailError) {
+      console.error("OTP email failed:", emailError);
 
-    const user_id = uuidv4();
+      return res.status(500).json({
+        message:
+          "Account created, but OTP email could not be sent. Please retry verification.",
+      });
+    }
 
-    await User.create(
-      {
-        user_id,
-        first_name,
-        last_name,
-        email,
-        phone_number: normalizedPhone,
-        password_salt: salt,
-        password_hash: hashedPassword,
-      },
-      { transaction },
-    );
-
-    await Wallet.create(
-      {
-        wallet_id: uuidv4(),
-        user_id,
-        balance: 0,
-      },
-      { transaction },
-    );
-
-    const otpCode = generateOtp();
-    const expiresAt = new Date(Date.now() + 1 * 60 * 1000);
-
-    await Otp.create(
-      {
-        email,
-        otp: otpCode,
-        expires_at: expiresAt,
-      },
-      { transaction },
-    );
-
-    await transaction.commit();
-
-    await sendEmail(email, "Verify your OTP", { otp: otpCode }, "otp");
-
-    return res.status(201).json({
-      message: "Verification OTP sent to your email",
-    });
+    return res.status(201).json(result.body);
   } catch (error) {
-    await transaction.rollback();
-
-    // Handle DB unique constraint (race condition safety)
     if (error.name === "SequelizeUniqueConstraintError") {
-      const field = error.errors[0]?.path;
+      const field = error.errors?.[0]?.path || "Email or phone";
       return res.status(409).json({
         message: `${field.replace("_", " ")} already exists`,
       });
@@ -121,6 +140,7 @@ const createUser = async (req, res) => {
     });
   }
 };
+
 const checkAvailability = async (req, res) => {
   try {
     const { email, phone_number } = req.body;
@@ -152,7 +172,7 @@ const checkAvailability = async (req, res) => {
     console.error(error);
 
     return res.status(500).json({
-      emilAvailable: result.emailAvailable,
+      emailAvailable: result.emailAvailable,
       phoneAvailable: result.phoneAvailable,
       emailMessage: result.emailMessage,
       phoneMessage: result.phoneMessage,
@@ -515,35 +535,60 @@ const startFundAccount = async (req, res) => {
     const { amount } = req.body;
     const { email } = req.user;
 
-    if (!amount || Number(amount) < 100) {
+    const fundingAmount = Number(amount);
+
+    if (
+      amount === undefined ||
+      amount === null ||
+      amount === "" ||
+      !Number.isFinite(fundingAmount) ||
+      fundingAmount < 100
+    ) {
       return res.status(400).json({
         message: "Minimum funding amount is ₦100",
       });
     }
 
-    const checkUser = await User.findOne({
-      where: { email },
-    });
-
-    if (!checkUser || !checkUser.email) {
-      throw new Error("User email is required");
+    if (!email) {
+      return res.status(400).json({
+        message: "User email is required",
+      });
     }
 
-    const transaction = await intializePayment(email, Number(amount));
+    const user = await User.findOne({
+      where: { email },
+      attributes: ["email"],
+    });
 
-    if (transaction.data.status === false) {
-      throw new Error("Payment cannot be initialized this moment");
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    const payment = await intializePayment(
+      user.email,
+      fundingAmount
+    );
+
+    if (
+      !payment.data?.status ||
+      !payment.data?.data?.reference
+    ) {
+      return res.status(400).json({
+        message: "Payment cannot be initialized at this moment",
+      });
     }
 
     return res.status(200).json({
       message: "Transaction initialized successfully",
-      data: transaction.data.data,
+      data: payment.data.data,
     });
   } catch (error) {
-    console.log("error", error);
+    console.error("Start fund account error:", error.message);
 
-    return res.status(400).json({
-      message: error.message || "Something went wrong",
+    return res.status(500).json({
+      message: "Unable to initialize payment at this time",
     });
   }
 };
@@ -558,65 +603,80 @@ const completeFundAccount = async (req, res) => {
     });
   }
 
-  const t = await sequelize.transaction();
+  let t;
 
   try {
-    // Get authenticated user
-    const user = await User.findByPk(user_id, {
-      transaction: t,
-    });
+    // 1. Get the authenticated user without opening a transaction
+    const user = await User.findByPk(user_id);
 
     if (!user || !user.email) {
-      throw new Error("User not found");
-    }
-
-    // Check if this reference has already been processed
-    const existingTx = await Transaction.findOne({
-      where: {
-        payment_reference: reference,
-      },
-      transaction: t,
-      lock: t.LOCK.UPDATE,
-    });
-
-    if (existingTx) {
-      await t.rollback();
-
-      return res.status(200).json({
-        message: "Transaction already processed",
-        new_balance: null,
+      return res.status(404).json({
+        error: "User not found",
       });
     }
 
-    // Verify transaction directly with Paystack
-    const verifyPaymentTransaction = await verifyPayment(reference);
+    // 2. Verify payment with Paystack BEFORE opening a DB transaction
+    const response = await verifyPayment(reference);
 
-    if (!verifyPaymentTransaction.data.status) {
-      throw new Error("Transaction verification failed");
+    if (!response.data?.status || !response.data?.data) {
+      return res.status(400).json({
+        error: "Transaction verification failed",
+      });
     }
 
-    const data = verifyPaymentTransaction.data.data;
+    const data = response.data.data;
 
-    // Make sure this Paystack transaction belongs to this user
+    // 3. Validate the payment details
+    if (data.reference !== reference) {
+      return res.status(400).json({
+        error: "Payment reference mismatch",
+      });
+    }
+
+    if (data.status !== "success") {
+      return res.status(400).json({
+        error: "Payment was not successful",
+      });
+    }
+
     if (
-      !data.customer ||
+      !data.customer?.email ||
       data.customer.email.toLowerCase() !== user.email.toLowerCase()
     ) {
-      throw new Error("Payment does not belong to this user");
+      return res.status(403).json({
+        error: "Payment does not belong to this user",
+      });
     }
 
-    // Make sure Paystack says payment was successful
-    if (data.status !== "success") {
-      throw new Error("Payment was not successful");
+    if (data.currency !== "NGN" || !Number.isFinite(data.amount) || data.amount <= 0) {
+      return res.status(400).json({
+        error: "Invalid payment amount or currency",
+      });
     }
 
     const amountInNaira = data.amount / 100;
 
-    // Find user's wallet
+    // 4. Open a short DB transaction only after verification
+    t = await sequelize.transaction();
+
+    // Check whether this reference has already been credited
+    const existingTx = await Transaction.findOne({
+      where: { payment_reference: reference },
+      transaction: t,
+    });
+
+    if (existingTx) {
+      await t.rollback();
+      t = null;
+
+      return res.status(200).json({
+        message: "Transaction already processed",
+      });
+    }
+
+    // Lock the wallet to prevent simultaneous balance updates
     const wallet = await Wallet.findOne({
-      where: {
-        user_id,
-      },
+      where: { user_id },
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
@@ -625,14 +685,16 @@ const completeFundAccount = async (req, res) => {
       throw new Error("Wallet not found");
     }
 
-    // Credit wallet
-    wallet.balance = parseFloat(wallet.balance || 0) + amountInNaira;
+    const currentBalance = Number(wallet.balance || 0);
 
-    await wallet.save({
-      transaction: t,
-    });
+    if (!Number.isFinite(currentBalance)) {
+      throw new Error("Invalid wallet balance");
+    }
 
-    // Record transaction
+    wallet.balance = currentBalance + amountInNaira;
+
+    await wallet.save({ transaction: t });
+
     await Transaction.create(
       {
         transaction_id: uuidv4(),
@@ -643,19 +705,24 @@ const completeFundAccount = async (req, res) => {
         status: TRANSACTION_STATUS.SUCCESSFUL,
         payment_reference: reference,
       },
-      {
-        transaction: t,
-      },
+      { transaction: t },
     );
 
     await t.commit();
+    t = null;
 
     return res.status(200).json({
       message: "Wallet funded successfully",
-      new_balance: wallet.balance,
+      new_balance: Number(wallet.balance),
     });
   } catch (error) {
-    await t.rollback();
+    if (t && !t.finished) {
+      try {
+        await t.rollback();
+      } catch (rollbackError) {
+        console.error("Fund account rollback error:", rollbackError);
+      }
+    }
 
     console.error("Fund account error:", error);
 
@@ -1134,8 +1201,6 @@ const deleteBeneficiary = async (req, res) => {
   }
 };
 
-
-
 const getUserNotifications = async (req, res) => {
   try {
     const { user_id } = req.user;
@@ -1185,7 +1250,7 @@ const markAllNotificationsRead = async (req, res) => {
 
     await Notification.update(
       { status: "read" },
-      { where: { user_id, status: "unread" } }
+      { where: { user_id, status: "unread" } },
     );
 
     return res.json({ message: "All notifications marked as read" });
@@ -1230,10 +1295,6 @@ const clearAllNotifications = async (req, res) => {
   }
 };
 
-
-
-
-
 module.exports = {
   createUser,
   verifyUser,
@@ -1259,7 +1320,7 @@ module.exports = {
   createBeneficiary,
   getUserBeneficiaries,
   deleteBeneficiary,
-   getUserNotifications,
+  getUserNotifications,
   markNotificationRead,
   markAllNotificationsRead,
   deleteNotification,

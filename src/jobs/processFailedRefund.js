@@ -69,15 +69,15 @@ async function processFailedRefunds() {
             notificationError.message
           );
         }
-      } catch (err) {
+           } catch (err) {
         console.error(
           `❌ Refund failed for ${txn.transaction_ref}:`,
-          err.message
+          err.stack || err
         );
       }
     }
-  } catch (err) {
-    console.error("❌ Process Failed Refunds Error:", err.message);
+   } catch (err) {
+    console.error("❌ Process Failed Refunds Error:", err.stack || err);
   }
 }
 
