@@ -1,16 +1,8 @@
+
 const { DevicePushToken } = require("../../models");
 
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 
-/**
- * Sends a push notification to every device registered for a user.
- * Expo's push API accepts up to 100 messages per request; we're nowhere
- * near that volume per user, so a single request per call is fine.
- *
- * Never throws — a push failure should never break the caller's main flow
- * (payment processing, refunds, etc.), matching the same isolation pattern
- * used for email/notification calls elsewhere in this codebase.
- */
 async function sendPushNotification({ user_id, title, message, data = {} }) {
   try {
     const tokens = await DevicePushToken.findAll({
@@ -18,8 +10,15 @@ async function sendPushNotification({ user_id, title, message, data = {} }) {
     });
 
     if (tokens.length === 0) {
-      return; // user has no registered devices — nothing to do
+      console.warn(
+        `⚠️ No registered push tokens for user ${user_id}`
+      );
+      return;
     }
+
+    console.log(
+      `📲 Sending push notification to ${tokens.length} device(s) for user ${user_id}`
+    );
 
     const messages = tokens.map((t) => ({
       to: t.token,
@@ -41,27 +40,45 @@ async function sendPushNotification({ user_id, title, message, data = {} }) {
 
     const result = await response.json();
 
-    // Expo returns one ticket per message, in the same order. A
-    // DeviceNotRegistered error means the token is dead (app uninstalled,
-    // etc.) — clean those up so we stop trying to push to them.
+    console.log("📨 Expo push HTTP status:", response.status);
+    console.log("📨 Expo push response:", JSON.stringify(result));
+
+    if (!response.ok) {
+      console.error("❌ Expo rejected the push request");
+      return;
+    }
+
     if (Array.isArray(result?.data)) {
       const deadTokens = [];
 
       result.data.forEach((ticket, i) => {
-        if (
-          ticket.status === "error" &&
-          ticket.details?.error === "DeviceNotRegistered"
-        ) {
-          deadTokens.push(tokens[i].token);
+        if (ticket.status === "error") {
+          console.error(
+            `❌ Expo push ticket ${i}:`,
+            JSON.stringify(ticket)
+          );
+
+          if (ticket.details?.error === "DeviceNotRegistered") {
+            deadTokens.push(tokens[i].token);
+          }
+        } else {
+          console.log(`✅ Expo accepted push ticket ${i}`);
         }
       });
 
       if (deadTokens.length > 0) {
-        await DevicePushToken.destroy({ where: { token: deadTokens } });
+        await DevicePushToken.destroy({
+          where: { token: deadTokens },
+        });
+
+        console.log(`🧹 Removed ${deadTokens.length} invalid push token(s)`);
       }
     }
   } catch (error) {
-    console.error("⚠️ Push notification send failed:", error.message);
+    console.error(
+      "⚠️ Push notification send failed:",
+      error.stack || error
+    );
   }
 }
 
