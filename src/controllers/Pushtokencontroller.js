@@ -2,6 +2,10 @@ const { DevicePushToken } = require("../../models");
 
 const registerPushToken = async (req, res) => {
   try {
+    console.log("[Push] Registration request received");
+console.log("[Push] Authenticated user:", req.user?.user_id);
+console.log("[Push] Token received:", Boolean(req.body?.token));
+console.log("[Push] Platform:", req.body?.platform);
     const { user_id } = req.user;
     const { token, platform } = req.body;
 
@@ -14,10 +18,11 @@ const registerPushToken = async (req, res) => {
     // then login as someone else), re-point it rather than erroring on
     // the unique constraint.
     const [deviceToken] = await DevicePushToken.upsert(
+      
       { token, platform, user_id },
       { conflictFields: ["token"] },
     );
-
+console.log("[Push] Token saved successfully");
     return res.json({ message: "Push token registered", deviceToken });
   } catch (err) {
     console.error("Register Push Token Error:", err.message);
