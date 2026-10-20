@@ -1,46 +1,51 @@
-const nodemailer = require("nodemailer");
-const path = require("path");
+
+require("dotenv").config();
+
+const SibApiV3Sdk = require("sib-api-v3-sdk");
 const fs = require("fs");
+const path = require("path");
 const hbs = require("handlebars");
 
-const readAndSendEmail = async (data, views) => {
-  const pathName = path.join(__dirname, `../views/${views}.hbs`);
-  const source = fs.readFileSync(pathName, "utf8");
-  const template = hbs.compile(source);
-  const result = template(data);
+const client = SibApiV3Sdk.ApiClient.instance;
+client.authentications["api-key"].apiKey = process.env.BREVO_API_KEY;
 
-  return result;
+const tranEmailApi = new SibApiV3Sdk.TransactionalEmailsApi();
+
+const renderTemplate = (data, templateName) => {
+  const filePath = path.join(__dirname, `../views/${templateName}.hbs`);
+  const source = fs.readFileSync(filePath, "utf8");
+  return hbs.compile(source)(data);
 };
 
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.GMAIL_APP_USER,
-    pass: process.env.GMAIL_APP_PASS,
-  },
-  connectionTimeout: 15000,
-  greetingTimeout: 10000,
-  socketTimeout: 20000,
-});
+async function sendEmail(to, subject, data, templateName) {
+  if (!process.env.BREVO_API_KEY) {
+    throw new Error("BREVO_API_KEY is missing");
+  }
 
-async function sendEmail(mailTo, subject, data, views) {
-  const html = await readAndSendEmail(data, views);
+  if (!process.env.BREVO_SENDER_EMAIL) {
+    throw new Error("BREVO_SENDER_EMAIL is missing");
+  }
 
-  const mailOptions = {
-    from: process.env.GMAIL_APP_USER,
-    to: mailTo,
-    subject,
-    html,
-  };
+  const htmlContent = renderTemplate(data, templateName);
 
   try {
-    const info = await transporter.sendMail(mailOptions);
+    const result = await tranEmailApi.sendTransacEmail({
+      sender: {
+        email: process.env.BREVO_SENDER_EMAIL,
+        name: process.env.BREVO_SENDER_NAME || "FluxPay",
+      },
+      to: [{ email: to }],
+      subject,
+      htmlContent,
+    });
 
-    console.log("Email sent:", info.response);
-
-    return info;
+    console.log("✅ Brevo email sent:", result.messageId || "accepted");
+    return result;
   } catch (error) {
-    console.error("Error sending email:", error);
+    console.error(
+      "❌ Brevo API error:",
+      error.response?.body || error.message || error
+    );
     throw error;
   }
 }
