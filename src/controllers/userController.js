@@ -111,17 +111,25 @@ const createUser = async (req, res) => {
       return res.status(result.status).json(result.body);
     }
 
-    // Send email only after the database transaction commits.
-    try {
-      await sendEmail(email, "Verify your OTP", { otp: otpCode }, "otp");
-    } catch (emailError) {
-      console.error("OTP email failed:", emailError);
+  console.log("📧 Starting OTP email delivery...");
 
-      return res.status(500).json({
-        message:
-          "Account created, but OTP email could not be sent. Please retry verification.",
-      });
-    }
+try {
+  await sendEmail(
+    email,
+    "Verify your OTP",
+    { otp: otpCode },
+    "otp"
+  );
+
+  console.log("✅ OTP email delivery completed");
+} catch (emailError) {
+  console.error("❌ OTP email failed:", emailError.stack || emailError);
+
+  return res.status(500).json({
+    message:
+      "Account created, but OTP email could not be sent. Please retry verification.",
+  });
+}
 
     return res.status(201).json(result.body);
   } catch (error) {
